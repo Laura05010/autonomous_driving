@@ -1,110 +1,112 @@
-#!/usr/bin/env python
-#
-#  THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
-#
-#  Copyright (C) 2013
-#  Honda Research Institute Europe GmbH
-#  Carl-Legien-Str. 30
-#  63073 Offenbach/Main
-#  Germany
-#
-#  UNPUBLISHED PROPRIETARY MATERIAL.
-#  ALL RIGHTS RESERVED.
-#
-#  Authors: Tobias Kuehnl <tkuehnl@cor-lab.uni-bielefeld.de>
+#!/usr/bin/env python3
+
+# THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
+# Copyright (C) 2013
+# Honda Research Institute Europe GmbH
+# Carl-Legien-Str. 30
+# 63073 Offenbach/Main
+# Germany
+# UNPUBLISHED PROPRIETARY MATERIAL. ALL RIGHTS RESERVED.
+# Authors: Tobias Kuehnl <tkuehnl@cor-lab.uni-bielefeld.de>
 #           Jannik Fritsch <jannik.fritsch@honda-ri.de>
-#
 
-from BirdsEyeView import BirdsEyeView
+import os
+import sys
 from glob import glob
-import os,sys
-import cv2 # OpenCV
+import cv2  # OpenCV
+from BirdsEyeView import BirdsEyeView
 
-#########################################################################
-# function that does the transformation: Image --> BirdsEyeView
-#########################################################################
-def main(dataFiles, pathToCalib, outputPath, calib_end  = '.txt'):
-    '''
-    Main method of transform2BEV
-    :param dataFiles: the files you want to transform to BirdsEyeView, e.g., /home/elvis/kitti_road/data/*.png
-    :param pathToCalib: containing calib data as txt-files, e.g., /home/elvis/kitti_road/calib/
-    :param outputPath: where the BirdsEyeView data will be saved, e.g., /home/elvis/kitti_road/data_bev
-    :param calib_end: file extension of calib-files (OPTIONAL)
-    '''
+
+def main(data_files: str, path_to_calib: str, output_path: str, calib_end: str = '.txt') -> None:
+    """
+    Main function for transforming images to BirdsEyeView (BEV).
     
-    
-    # Extract path of data
-    pathToData = dataFiles.split(dataFiles.split('/')[-1])[0]
-    assert os.path.isdir(pathToData), "The directory containig the input data seems to not exist!"
-    assert os.path.isdir(pathToCalib), "Error <PathToCalib> does not exist"
-      
-    # BEV class
+    Args:
+        data_files: Input file pattern to be transformed to BirdsEyeView, e.g., "/home/user/kitti_road/data/*.png".
+        path_to_calib: Directory containing calibration data files, e.g., "/home/user/kitti_road/calib/".
+        output_path: Directory where the BirdsEyeView data will be saved, e.g., "/home/user/kitti_road/data_bev".
+        calib_end: File extension of calibration files. Defaults to '.txt'.
+    """
+    # Verify that the input data directory and calibration directory exist
+    path_to_data = os.path.dirname(data_files)
+    if not os.path.isdir(path_to_data):
+        raise FileNotFoundError(f"The directory containing the input data does not exist: {path_to_data}")
+    if not os.path.isdir(path_to_calib):
+        raise FileNotFoundError(f"Calibration directory does not exist: {path_to_calib}")
+
+    # Initialize the BirdsEyeView class
     bev = BirdsEyeView()
-    
-    #check
-    if not os.path.isdir(outputPath):
-        os.makedirs(outputPath)  
-    
-    # get filelist
-    fileList_data = glob(dataFiles)
-    assert len(fileList_data), 'Could not find files in: %s' %pathToData
-    
-    # Loop over all files
-    for aFile in fileList_data:
-        assert os.path.isfile(aFile), '%s is not a file' %aFile
-        
-        file_key = aFile.split('/')[-1].split('.')[0]
-        print "Transforming file %s to Birds Eye View " %file_key 
-        tags = file_key.split('_')
-        data_end = aFile.split(file_key)[-1]
-        
-        #calibration filename
-        calib_file = os.path.join(pathToCalib, file_key + calib_end)
-        
-        if not os.path.isfile(calib_file) and len(tags)==3:
-            # exclude lane or road from filename!
-            calib_file = os.path.join(pathToCalib, tags[0]+ '_' + tags[2] + calib_end)
-        
-        # Check if calb file exist!
+
+    # Create the output directory if it doesn't exist
+    os.makedirs(output_path, exist_ok=True)
+
+    # Get the list of data files
+    file_list_data = glob(data_files)
+    if not file_list_data:
+        raise FileNotFoundError(f"Could not find files in: {path_to_data}")
+
+    # Process each file
+    for a_file in file_list_data:
+        file_key = os.path.splitext(os.path.basename(a_file))[0]
+        print(f"Transforming file {file_key} to BirdsEyeView")
+
+        # Determine the calibration file
+        calib_file = os.path.join(path_to_calib, file_key + calib_end)
+
+        # Handle potential exceptions and fallback filenames
         if not os.path.isfile(calib_file):
-            print "Cannot find calib file: %s" %calib_file
-            print "Attention: It is assumed that input data and calib files have the same name (only different extension)!" 
-            sys.exit(1)
-            
-        # Update calibration for Birds Eye View
+            tags = file_key.split('_')
+            if len(tags) == 3:
+                calib_file = os.path.join(path_to_calib, f"{tags[0]}_{tags[2]}{calib_end}")
+
+            # Raise an error if the calibration file still doesn't exist
+            if not os.path.isfile(calib_file):
+                raise FileNotFoundError(
+                    f"Cannot find calibration file: {calib_file}. "
+                    "Input data and calibration files are expected to have the same name (with different extensions)."
+                )
+
+        # Set up BirdsEyeView with the calibration file
         bev.setup(calib_file)
-        
-        # Read image
-        data = cv2.imread(aFile, cv2.CV_LOAD_IMAGE_UNCHANGED)
-        
-        # Compute Birds Eye View
+
+        # Read the input image
+        data = cv2.imread(a_file, cv2.IMREAD_UNCHANGED)
+
+        # Compute the BirdsEyeView
         data_bev = bev.compute(data)
-        
-        # Write output (BEV)
-        fn_out = os.path.join(outputPath,file_key + data_end)
+
+        # Output file path
+        fn_out = os.path.join(output_path, os.path.basename(a_file))
+
+        # Write the output image (BEV)
         cv2.imwrite(fn_out, data_bev)
-        print "done ..."
-    
-    print "BirdsEyeView was stored in: %s" %outputPath
-#########################################################################
-# transformation script Image --> BirdsEyeView
-#########################################################################       
+        print("Transformation done.")
+
+    print(f"BirdsEyeView was stored in: {output_path}")
+
+
 if __name__ == "__main__":
-    
-    # check for correct number of arguments.
-    if len(sys.argv)!=4:
-        print "Usage: python transform2BEV.py <InputFiles> <PathToCalib> <OutputPath> "
-        print "<InputFiles>: the files you want to transform to BirdsEyeView, e.g., /home/elvis/kitti_road/data/*.png"
-        print "<PathToCalib>: containing calib data as calib-files, e.g., /home/elvis/kitti_road/calib/" 
-        print "<OutputPath>: where the BirdsEyeView data will be saved, e.g., /home/elvis/kitti_road/data_bev"
-        print "ATTENTION: It is assumed that input data and calib files have the same name (only different extension)!" 
+    # Check for the correct number of arguments
+    if len(sys.argv) != 4:
+        print("Usage: python transform2BEV.py <InputFiles> <PathToCalib> <OutputPath>")
+        print(
+            "<InputFiles>: Files you want to transform to BirdsEyeView, e.g., /home/user/kitti_road/data/*.png"
+        )
+        print(
+            "<PathToCalib>: Directory containing calibration data, e.g., /home/user/kitti_road/calib/"
+        )
+        print(
+            "<OutputPath>: Directory where the BirdsEyeView data will be saved, e.g., /home/user/kitti_road/data_bev"
+        )
+        print(
+            "Note: It is assumed that input data and calibration files have the same name (with different extensions)."
+        )
         sys.exit(1)
-    
-    # parse parameters
-    dataFiles = sys.argv[1]
-    pathToCalib = sys.argv[2]
-    outputPath = sys.argv[3]
-    
-    # Excecute main fun
-    main(dataFiles, pathToCalib, outputPath)
-    
+
+    # Parse arguments
+    data_files = sys.argv[1]
+    path_to_calib = sys.argv[2]
+    output_path = sys.argv[3]
+
+    # Execute main function
+    main(data_files, path_to_calib, output_path)

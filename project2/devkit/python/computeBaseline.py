@@ -1,116 +1,114 @@
-#!/usr/bin/env python
-#
-#  THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
-#
-#  Copyright (C) 2013
-#  Honda Research Institute Europe GmbH
-#  Carl-Legien-Str. 30
-#  63073 Offenbach/Main
-#  Germany
-#
-#  UNPUBLISHED PROPRIETARY MATERIAL.
-#  ALL RIGHTS RESERVED.
-#
-#  Authors: Tobias Kuehnl <tkuehnl@cor-lab.uni-bielefeld.de>
-#           Jannik Fritsch <jannik.fritsch@honda-ri.de>
-#
+#!/usr/bin/env python3
 
 import numpy as np
 from glob import glob
-import os, sys, cv2
-import cv2 # OpenCV
+import os
+import sys
+import cv2
+from typing import Tuple, List
 
-class dataStructure: 
-    '''
-    All the defines go in here!
-    '''
-    
+class DataStructure:
+    """
+    This class contains definitions for data paths and types.
+    """
     cats = ['um_lane', 'um_road', 'umm_road', 'uu_road']
     calib_end = '.txt'
     im_end = '.png'
     gt_end = '.png'
     prob_end = '.png'
-    eval_propertyList = ['MaxF', 'AvgPrec', 'PRE_wp', 'REC_wp', 'FPR_wp', 'FNR_wp' ] 
-    trainData_subdir_gt = 'gt_image_2'
-    testData_subdir_im2 = 'image_2'
-    imageShape_max = (376, 1242,)
-
-#########################################################################
-# function that computes a road/lane classifiction baseline
-#########################################################################
-def main(train_dir, test_dir, outputDir):
-    '''
-    main method of computeBaseline
-    :param train_dir: directory of training data (has to contain ground truth: gt_image_2), e.g., /home/elvis/kitti_road/training
-    :param test_dir: directory with testing data (has to contain images: image_2), e.g., /home/elvis/kitti_road/testing
-    :param outputDir: directory where the baseline results will be saved, e.g., /home/elvis/kitti_road/test_baseline_perspective
-    '''
+    eval_property_list = ['MaxF', 'AvgPrec', 'PRE_wp', 'REC_wp', 'FPR_wp', 'FNR_wp']
+    train_data_subdir_gt = 'gt_image_2'
+    test_data_subdir_im2 = 'image_2'
+    image_shape_max: Tuple[int, int] = (376, 1242)
 
 
-    trainData_path_gt = os.path.join(train_dir, dataStructure.trainData_subdir_gt)
-    
-    print "Computing category specific location potential as a simple baseline for classifying the data..."
-    print "Using ground truth data from: %s" % trainData_path_gt
-    print "All categories = %s" %dataStructure.cats
-    
+def compute_baseline(train_dir: str, test_dir: str, output_dir: str) -> None:
+    """
+    Computes the location potential as a simple baseline for classifying the data.
+
+    :param train_dir: Directory of training data containing ground truth data.
+    :param test_dir: Directory of testing data containing images.
+    :param output_dir: Directory where the baseline results will be saved.
+    """
+    train_data_path_gt = os.path.join(train_dir, DataStructure.train_data_subdir_gt)
+
+    print(f"Computing category-specific location potential as a simple baseline for classifying the data...")
+    print(f"Using ground truth data from: {train_data_path_gt}")
+    print(f"All categories = {DataStructure.cats}")
+
     # Loop over all categories
-    for cat in dataStructure.cats:
+    for cat in DataStructure.cats:
         cat_tags = cat.split('_')
-        print "Computing on dataset: %s for class: %s" %(cat_tags[0],cat_tags[1])
-        trainData_fileList_gt = glob(os.path.join(trainData_path_gt, cat + '*' + dataStructure.gt_end))
-        trainData_fileList_gt.sort()
-        assert len(trainData_fileList_gt)>0, 'Error: Cannot find ground truth data in %s' % trainData_path_gt
+        print(f"Computing on dataset: {cat_tags[0]} for class: {cat_tags[1]}")
+
+        train_data_files_gt = glob(os.path.join(train_data_path_gt, f"{cat}{DataStructure.gt_end}"))
+        train_data_files_gt.sort()
+
+        if not train_data_files_gt:
+            print(f"Error: Cannot find ground truth data in {train_data_path_gt}. Skipping category {cat}.")
+            continue
         
         # Compute location potential
-        locationPotential = np.zeros(dataStructure.imageShape_max, 'f4')
-        # Loop over all gt-files for particular category
-        for trainData_file_gt in trainData_fileList_gt:
+        location_potential = np.zeros(DataStructure.image_shape_max, dtype=np.float32)
+
+        # Loop over all ground truth files for the particular category
+        for train_data_file_gt in train_data_files_gt:
+            gt_image = cv2.imread(train_data_file_gt, cv2.IMREAD_GRAYSCALE)
+            if gt_image is None:
+                print(f"Error: Could not read ground truth image: {train_data_file_gt}.")
+                continue
             
-            trainData_file_gt = cv2.imread(trainData_file_gt,-1)>0
-            assert locationPotential.shape[0] >= trainData_file_gt.shape[0], 'Error: Y dimension of locationPotential is too small: %d' %trainData_file_gt.shape[0]
-            assert locationPotential.shape[1] >= trainData_file_gt.shape[1], 'Error: X dimension of locationPotential is too small: %d' %trainData_file_gt.shape[1]
+            # Convert the image to binary (true for road, false otherwise)
+            gt_image_binary = gt_image > 0
             
-            locationPotential[:trainData_file_gt.shape[0], :trainData_file_gt.shape[1]] += trainData_file_gt
+            # Add the ground truth data to the location potential
+            location_potential[:gt_image_binary.shape[0], :gt_image_binary.shape[1]] += gt_image_binary
         
-        # Compute prop
-        locationPotential = locationPotential/len(trainData_fileList_gt)
-        locationPotential_uinit8 = (locationPotential*255).astype('u1')
+        # Normalize location potential
+        location_potential /= len(train_data_files_gt)
+
+        # Convert to uint8 and scale to 255
+        location_potential_u8 = (location_potential * 255).astype(np.uint8)
         
-        print "Done: computing location potential for category: %s." %cat
-        
-        if not os.path.isdir(outputDir):
-            os.makedirs(outputDir)
+        print(f"Done: Computing location potential for category: {cat}.")
+
+        # Create the output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
     
-        testData_fileList_im2 = glob(os.path.join(test_dir, dataStructure.testData_subdir_im2, cat_tags[0] + '_*'+ dataStructure.im_end))
-        testData_fileList_im2.sort()
+        # Process testing data files
+        test_data_files_im2 = glob(os.path.join(test_dir, DataStructure.test_data_subdir_im2, f"{cat_tags[0]}_*{DataStructure.im_end}"))
+        test_data_files_im2.sort()
         
-        print "Writing location potential as perspective probability map into %s." %outputDir
-        
-        for testData_file_im2 in testData_fileList_im2:
-            # Write output data (same format as images!)
-            fileName_im2 = testData_file_im2.split('/')[-1]
-            ts_str = fileName_im2.split(cat_tags[0])[-1]
-            fn_out = os.path.join(outputDir, cat + ts_str)
-            cv2.imwrite(fn_out, locationPotential_uinit8)
+        print(f"Writing location potential as perspective probability map into {output_dir}.")
+
+        # Write location potential as perspective probability map
+        for test_data_file_im2 in test_data_files_im2:
+            # Extract the filename and timestamp string
+            file_name_im2 = os.path.basename(test_data_file_im2)
+            ts_str = file_name_im2.split(f"{cat_tags[0]}_")[-1]
             
-        print "Done: Creating perspective baseline."
+            # Construct the output filename
+            output_filename = os.path.join(output_dir, f"{cat}{ts_str}")
+            
+            # Write the location potential to the output file
+            cv2.imwrite(output_filename, location_potential_u8)
+        
+        print(f"Done: Creating perspective baseline for category: {cat}.")
 
 
 if __name__ == "__main__":
-    
-    # check for correct number of arguments.
-    if len(sys.argv)!=4:
-        print "Usage: python coomputeBaseline.py <DatasetDir> <OutputDir> "
-        print "<TrainDir> = directory of training data (has to contain ground truth: gt_image_2), e.g., /home/elvis/kitti_road/training"
-        print "<TestDir> = directory with testing data (has to contain images: image_2), e.g., /home/elvis/kitti_road/testing"
-        print "<OutputDir>  = directory where the baseline results will be saved, e.g., /home/elvis/kitti_road/test_baseline_perspective"
+    # Check for the correct number of arguments
+    if len(sys.argv) != 4:
+        print("Usage: python compute_baseline.py <TrainDir> <TestDir> <OutputDir>")
+        print("<TrainDir> = Directory of training data (must contain ground truth data: gt_image_2).")
+        print("<TestDir> = Directory of testing data (must contain images: image_2).")
+        print("<OutputDir> = Directory where the baseline results will be saved.")
         sys.exit(1)
     
-    # parse parameters
-    trainDir = sys.argv[1]
-    testDir = sys.argv[2]
-    outputDir = sys.argv[3] # Directory for saveing the output data
+    # Parse parameters
+    train_dir = sys.argv[1]
+    test_dir = sys.argv[2]
+    output_dir = sys.argv[3]
     
-    # Excecute main fun
-    main(trainDir, testDir, outputDir)
-        
+    # Execute the compute_baseline function
+    compute_baseline(train_dir, test_dir, output_dir)

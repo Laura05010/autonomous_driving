@@ -1,186 +1,161 @@
-#!/usr/bin/env python
-#
-#  THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
-#
-#  Copyright (C) 2013
-#  Honda Research Institute Europe GmbH
-#  Carl-Legien-Str. 30
-#  63073 Offenbach/Main
-#  Germany
-#
-#  UNPUBLISHED PROPRIETARY MATERIAL.
-#  ALL RIGHTS RESERVED.
-#
-#  Authors: Tobias Kuehnl <tkuehnl@cor-lab.uni-bielefeld.de>
-#           Jannik Fritsch <jannik.fritsch@honda-ri.de>
-#
+#!/usr/bin/env python3
+
+# THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
 
 import numpy as np
+from typing import Tuple, Dict, List, Optional
 
-def evalExp(gtBin, cur_prob, thres, validMap = None):
-    '''
-    Does the basic pixel based evaluation!
-    :param gtBin:
-    :param cur_prob:
-    :param thres:
-    :param validMap:
-    '''
+def eval_exp(
+    gt_bin: np.ndarray,
+    cur_prob: np.ndarray,
+    thresholds: np.ndarray,
+    valid_map: Optional[np.ndarray] = None
+) -> Tuple[np.ndarray, np.ndarray, int, int]:
+    """
+    Performs basic pixel-based evaluation.
+    
+    :param gt_bin: Ground truth binary map (2D array).
+    :param cur_prob: Current probability map (2D array).
+    :param thresholds: Array of threshold values.
+    :param valid_map: Optional valid map (2D array), defaults to None.
+    :return: Tuple of false negatives, false positives, positive sample count, and negative sample count.
+    """
+    assert cur_prob.ndim == 2 and gt_bin.ndim == 2, 'Input arrays must be 2D'
 
-    assert len(cur_prob.shape) == 2, 'Wrong size of input prob map'
-    assert len(gtBin.shape) == 2, 'Wrong size of input prob map'
-    thresInf = np.concatenate(([-np.Inf], thres, [np.Inf]))
+    # Append -Inf and Inf to thresholds
+    thresholds_ext = np.concatenate(([-np.inf], thresholds, [np.inf]))
 
-    # histogram of false negatives
-    if validMap!=None:
-        fnArray = cur_prob[(gtBin == True) & (validMap ==1)]
+    # Histogram of false negatives
+    if valid_map is not None:
+        fn_array = cur_prob[(gt_bin == True) & (valid_map == 1)]
     else:
-        fnArray = cur_prob[(gtBin == True)]
-    fnHist = np.histogram(fnArray,bins=thresInf)[0]
-    fnCum = np.cumsum(fnHist)
-    FN = fnCum[0:0+len(thres)];
-    
-    if validMap!=None:
-        fpArray = cur_prob[(gtBin == False) & (validMap ==1)]
+        fn_array = cur_prob[gt_bin == True]
+    fn_hist = np.histogram(fn_array, bins=thresholds_ext)[0]
+    fn_cum = np.cumsum(fn_hist)
+    fn = fn_cum[:len(thresholds)]
+
+    # Histogram of false positives
+    if valid_map is not None:
+        fp_array = cur_prob[(gt_bin == False) & (valid_map == 1)]
     else:
-        fpArray = cur_prob[(gtBin == False)]
-    
-    fpHist  = np.histogram(fpArray, bins=thresInf)[0]
-    fpCum = np.flipud(np.cumsum(np.flipud(fpHist)))
-    FP = fpCum[1:1+len(thres)]
+        fp_array = cur_prob[gt_bin == False]
+    fp_hist = np.histogram(fp_array, bins=thresholds_ext)[0]
+    fp_cum = np.flipud(np.cumsum(np.flipud(fp_hist)))
+    fp = fp_cum[1:1 + len(thresholds)]
 
-    # count labels and protos
-    #posNum = fnArray.shape[0]
-    #negNum = fpArray.shape[0]
-    if validMap!=None:
-        posNum = np.sum((gtBin == True) & (validMap ==1))
-        negNum = np.sum((gtBin == False) & (validMap ==1))
+    # Calculate positive and negative sample counts
+    if valid_map is not None:
+        pos_num = np.sum((gt_bin == True) & (valid_map == 1))
+        neg_num = np.sum((gt_bin == False) & (valid_map == 1))
     else:
-        posNum = np.sum(gtBin == True)
-        negNum = np.sum(gtBin == False)
-    return FN, FP, posNum, negNum
+        pos_num = np.sum(gt_bin == True)
+        neg_num = np.sum(gt_bin == False)
 
-def pxEval_maximizeFMeasure(totalPosNum, totalNegNum, totalFN, totalFP, thresh = None):
-    '''
+    return fn, fp, pos_num, neg_num
 
-    @param totalPosNum: scalar
-    @param totalNegNum: scalar
-    @param totalFN: vector
-    @param totalFP: vector
-    @param thresh: vector
-    '''
-
-    #Calc missing stuff
-    totalTP = totalPosNum - totalFN
-    totalTN = totalNegNum - totalFP
-
-
-    valid = (totalTP>=0) & (totalTN>=0)
-    assert valid.all(), 'Detected invalid elements in eval'
-
-    recall = totalTP / float( totalPosNum )
-    precision =  totalTP / (totalTP + totalFP + 1e-10)
+def px_eval_maximize_f_measure(
+    total_pos_num: int,
+    total_neg_num: int,
+    total_fn: np.ndarray,
+    total_fp: np.ndarray,
+    thresholds: np.ndarray
+) -> Dict[str, float]:
+    """
+    Calculate precision, recall, F-measure, and average precision.
     
+    :param total_pos_num: Total number of positive samples.
+    :param total_neg_num: Total number of negative samples.
+    :param total_fn: False negatives at different thresholds.
+    :param total_fp: False positives at different thresholds.
+    :param thresholds: Array of threshold values.
+    :return: Dictionary of evaluation measures including average precision and maximum F-measure.
+    """
+    # Calculate true positives and true negatives
+    total_tp = total_pos_num - total_fn
+    total_tn = total_neg_num - total_fp
+    
+    # Validate true positives and true negatives
+    valid = (total_tp >= 0) & (total_tn >= 0)
+    assert valid.all(), 'Invalid values in evaluation'
 
-    #Pascal VOC average precision
-    AvgPrec = 0
-    for i in np.arange(0,1.1,0.1):
-        ind = np.where(recall>=i)
-        pmax = max(precision[ind])
-        AvgPrec += pmax
-    AvgPrec = AvgPrec/11.0
-    
-    
-    # F-measure
-    #operation point
+    # Calculate recall and precision
+    recall = total_tp / float(total_pos_num)
+    precision = total_tp / (total_tp + total_fp + 1e-10)
+
+    # Calculate average precision using Pascal VOC metric
+    avg_prec = 0
+    for i in np.arange(0, 1.1, 0.1):
+        idx = np.where(recall >= i)
+        max_prec = precision[idx].max()
+        avg_prec += max_prec
+    avg_prec /= 11.0
+
+    # Calculate F-measure
     beta = 1.0
-    betasq = beta**2
-    F = (1 + betasq) * (precision * recall)/((betasq * precision) + recall + 1e-10)
-    index = F.argmax()
-    #original threshold
-    #index = 500
-    MaxF= F[index]
+    beta_sq = beta ** 2
+    f_measure = (1 + beta_sq) * (precision * recall) / ((beta_sq * precision) + recall + 1e-10)
+    max_f_idx = f_measure.argmax()
+    max_f = f_measure[max_f_idx]
+
+    # Calculate additional measures
+    tp_bst = total_tp[max_f_idx]
+    tn_bst = total_tn[max_f_idx]
+    fp_bst = total_fp[max_f_idx]
+    fn_bst = total_fn[max_f_idx]
+
+    # Prepare the result dictionary
+    result_dict: Dict[str, float] = {
+        'MaxF': max_f,
+        'AvgPrec': avg_prec,
+        'TP': tp_bst,
+        'TN': tn_bst,
+        'FP': fp_bst,
+        'FN': fn_bst,
+        'Precision': precision[max_f_idx],
+        'Recall': recall[max_f_idx],
+        'BestThresh': thresholds[max_f_idx],
+    }
+
+    return result_dict
+
+def calc_eval_measures(eval_dict: np.ndarray, tag: str = '_wp') -> Dict[str, np.ndarray]:
+    """
+    Calculate evaluation measures based on the input evaluation dictionary.
     
+    :param eval_dict: Evaluation dictionary containing TP, TN, FP, and FN values.
+    :param tag: Optional tag for labeling results, defaults to '_wp'.
+    :return: Dictionary of calculated measures including TPR, FPR, precision, recall, and others.
+    """
+    tp = eval_dict[:, 0].astype(np.float32)
+    tn = eval_dict[:, 1].astype(np.float32)
+    fp = eval_dict[:, 2].astype(np.float32)
+    fn = eval_dict[:, 3].astype(np.float32)
     
-    recall_bst = recall[index]
-    precision_bst =  precision[index]
-
-    TP = totalTP[index]
-    TN = totalTN[index]
-    FP = totalFP[index]
-    FN = totalFN[index]
-    valuesMaxF = np.zeros((1,4),'u4')
-    valuesMaxF[0,0] = TP
-    valuesMaxF[0,1] = TN
-    valuesMaxF[0,2] = FP
-    valuesMaxF[0,3] = FN
-
-    #ACC = (totalTP+ totalTN)/(totalPosNum+totalNegNum)
-    prob_eval_scores  = calcEvalMeasures(valuesMaxF)
-    prob_eval_scores['AvgPrec'] = AvgPrec
-    prob_eval_scores['MaxF'] = MaxF
-
-    #prob_eval_scores['totalFN'] = totalFN
-    #prob_eval_scores['totalFP'] = totalFP
-    prob_eval_scores['totalPosNum'] = totalPosNum
-    prob_eval_scores['totalNegNum'] = totalNegNum
-
-    prob_eval_scores['precision'] = precision
-    prob_eval_scores['recall'] = recall
-    #prob_eval_scores['precision_bst'] = precision_bst
-    #prob_eval_scores['recall_bst'] = recall_bst
-    prob_eval_scores['thresh'] = thresh
-    if thresh != None:
-        BestThresh= thresh[index]
-        prob_eval_scores['BestThresh'] = BestThresh
-
-    #return a dict
-    return prob_eval_scores
-
-
-
-def calcEvalMeasures(evalDict, tag  = '_wp'):
-    '''
+    q = tp / (tp + fp + fn)
+    p = tp + fn
+    n = tn + fp
     
-    :param evalDict:
-    :param tag:
-    '''
-    # array mode!
-    TP = evalDict[:,0].astype('f4')
-    TN = evalDict[:,1].astype('f4')
-    FP = evalDict[:,2].astype('f4')
-    FN = evalDict[:,3].astype('f4')
-    Q = TP / (TP + FP + FN)
-    P = TP + FN
-    N = TN + FP
-    TPR = TP / P
-    FPR = FP / N
-    FNR = FN / P
-    TNR = TN / N
-    A = (TP + TN) / (P + N)
-    precision = TP / (TP + FP)
-    recall = TP / P
-    #numSamples = TP + TN + FP + FN
-    correct_rate = A
+    tpr = tp / p
+    fpr = fp / n
+    fnr = fn / p
+    tnr = tn / n
+    accuracy = (tp + tn) / (p + n)
+    precision = tp / (tp + fp)
+    recall = tp / p
 
-    # F-measure
-    #beta = 1.0
-    #betasq = beta**2
-    #F_max = (1 + betasq) * (precision * recall)/((betasq * precision) + recall + 1e-10)
-    
-    
-    outDict =dict()
+    # Prepare the output dictionary
+    measures = {
+        f'TP{tag}': tp,
+        f'FP{tag}': fp,
+        f'FN{tag}': fn,
+        f'TN{tag}': tn,
+        f'Q{tag}': q,
+        f'A{tag}': accuracy,
+        f'TPR{tag}': tpr,
+        f'FPR{tag}': fpr,
+        f'FNR{tag}': fnr,
+        f'PRE{tag}': precision,
+        f'REC{tag}': recall,
+    }
 
-    outDict['TP'+ tag] = TP
-    outDict['FP'+ tag] = FP
-    outDict['FN'+ tag] = FN
-    outDict['TN'+ tag] = TN
-    outDict['Q'+ tag] = Q
-    outDict['A'+ tag] = A
-    outDict['TPR'+ tag] = TPR
-    outDict['FPR'+ tag] = FPR
-    outDict['FNR'+ tag] = FNR
-    outDict['PRE'+ tag] = precision
-    outDict['REC'+ tag] = recall
-    outDict['correct_rate'+ tag] = correct_rate
-    return outDict
-
+    return measures

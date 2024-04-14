@@ -1,168 +1,149 @@
-#!/usr/bin/env python
-#
-#  THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
-#
-#  Copyright (C) 2013
-#  Honda Research Institute Europe GmbH
-#  Carl-Legien-Str. 30
-#  63073 Offenbach/Main
-#  Germany
-#
-#  UNPUBLISHED PROPRIETARY MATERIAL.
-#  ALL RIGHTS RESERVED.
-#
-#  Authors: Tobias Kuehnl <tkuehnl@cor-lab.uni-bielefeld.de>
-#           Jannik Fritsch <jannik.fritsch@honda-ri.de>
-#
+#!/usr/bin/env python3
 
-import sys,os
+# THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
+
+import sys
+import os
 from glob import glob
-import shutil
-from helper import evalExp, pxEval_maximizeFMeasure
 import numpy as np
-import cv2 # OpenCV
+import cv2  # OpenCV
+from typing import List, Tuple, Optional, Dict
 
-class dataStructure: 
-    '''
-    All the defines go in here!
-    '''
-    
+# Importing custom functions from the helper module
+from helper import evalExp, pxEval_maximizeFMeasure
+
+class DataStructure:
+    """
+    Class containing definitions for data paths and evaluation properties.
+    """
     cats = ['um_lane', 'um_road', 'umm_road', 'uu_road']
     calib_end = '.txt'
     im_end = '.png'
     gt_end = '.png'
     prob_end = '.png'
-    eval_propertyList = ['MaxF', 'AvgPrec', 'PRE_wp', 'REC_wp', 'FPR_wp', 'FNR_wp' ] 
+    eval_property_list = ['MaxF', 'AvgPrec', 'PRE_wp', 'REC_wp', 'FPR_wp', 'FNR_wp']
 
-#########################################################################
-# function that does the evaluation
-#########################################################################
-def main(result_dir, train_dir, debug = False):
-    '''
-    main method of evaluate_road
-    :param result_dir: directory with the result propability maps, e.g., /home/elvis/kitti_road/my_results
-    :param gt_dir: training directory (has to contain gt_image_2)  e.g., /home/elvis/kitti_road/training
-    :param debug: debug flag (OPTIONAL)
-    '''
-    
-    print "Starting evaluation ..." 
-    print "Available categories are: %s" %dataStructure.cats
-    
-    thresh = np.array(range(0,256))/255.0
-    trainData_subdir_gt = 'gt_image_2/'
-    gt_dir = os.path.join(train_dir,trainData_subdir_gt)
-    
-    assert os.path.isdir(result_dir), 'Cannot find result_dir: %s ' %result_dir
-    
-    # In the submission_dir we expect the probmaps! 
-    submission_dir = result_dir
-    assert os.path.isdir(submission_dir), 'Cannot find %s, ' %submission_dir
-    
-    # init result
-    prob_eval_scores = [] # the eval results in a dict
-    eval_cats = [] # saves al categories at were evaluated
-    outputline = []
-    for cat in dataStructure.cats:
-        print "Execute evaluation for category %s ..." %cat
-        fn_search  = '%s*%s' %(cat, dataStructure.gt_end)
-        gt_fileList = glob(os.path.join(gt_dir, fn_search))
-        assert len(gt_fileList)>0, 'Error reading ground truth'
-        # Init data for categgory
-        category_ok = True # Flag for each cat
-        totalFP = np.zeros( thresh.shape )
-        totalFN = np.zeros( thresh.shape )
-        totalPosNum = 0
-        totalNegNum = 0
-        
-        firstFile  = gt_fileList[0]
-        file_key = firstFile.split('/')[-1].split('.')[0]
-        tags = file_key.split('_')
-        ts_tag = tags[2]
-        dataset_tag = tags[0]
-        class_tag = tags[1]
-        
-        submission_tag = dataset_tag + '_' + class_tag + '_'
-        print "Searching for submitted files with prefix: %s" %submission_tag
-        
-        for fn_curGt in gt_fileList:
-            
-            file_key = fn_curGt.split('/')[-1].split('.')[0]
+def main(result_dir: str, train_dir: str, debug: bool = False) -> bool:
+    """
+    Main method for evaluating the road data.
+
+    :param result_dir: Directory with the result probability maps, e.g., /home/elvis/kitti_road/my_results
+    :param train_dir: Training directory (must contain gt_image_2), e.g., /home/elvis/kitti_road/training
+    :param debug: Debug flag (optional)
+    :return: True if evaluation succeeded for any category, False otherwise.
+    """
+    print("Starting evaluation...")
+    print(f"Available categories are: {DataStructure.cats}")
+
+    # Define the threshold array
+    thresh = np.arange(0, 256) / 255.0
+    train_data_subdir_gt = 'gt_image_2/'
+    gt_dir = os.path.join(train_dir, train_data_subdir_gt)
+
+    # Check that the result directory exists
+    if not os.path.isdir(result_dir):
+        print(f"Cannot find result_dir: {result_dir}")
+        return False
+
+    # Initialize results
+    prob_eval_scores: List[Dict] = []
+    eval_cats: List[str] = []
+
+    # Evaluate each category
+    for cat in DataStructure.cats:
+        print(f"Executing evaluation for category {cat}...")
+        fn_search = f"{cat}*{DataStructure.gt_end}"
+        gt_file_list = glob(os.path.join(gt_dir, fn_search))
+        if not gt_file_list:
+            print(f"Error reading ground truth for category {cat}")
+            continue
+
+        # Initialize data for the category
+        category_ok = True
+        total_fp = np.zeros(thresh.shape)
+        total_fn = np.zeros(thresh.shape)
+        total_pos_num = 0
+        total_neg_num = 0
+
+        # Evaluate files in the current category
+        for fn_cur_gt in gt_file_list:
+            file_key = os.path.splitext(os.path.basename(fn_cur_gt))[0]
+
             if debug:
-                print "Processing file: %s " %file_key
-            
-            # get tags
-            tags = file_key.split('_')
-            ts_tag = tags[2]
-            dataset_tag = tags[0]
-            class_tag = tags[1]
-            
-            
+                print(f"Processing file: {file_key}")
+
             # Read GT
-            assert os.path.isfile(fn_curGt), 'Cannot find: %s' %fn_curGt
-            cur_gt = cv2.imread(fn_curGt,0)>0
-            
-            # Read probmap and normalize
-            fn_curProb = os.path.join(submission_dir, file_key + dataStructure.prob_end)
-            
-            if not os.path.isfile(fn_curProb):
-                print "Cannot find file: %s for category %s." %(file_key, cat)
-                print "--> Will now abort evaluation for this particular category."
+            cur_gt = cv2.imread(fn_cur_gt, cv2.IMREAD_GRAYSCALE) > 0
+
+            # Read probability map
+            fn_cur_prob = os.path.join(result_dir, f"{file_key}{DataStructure.prob_end}")
+            if not os.path.isfile(fn_cur_prob):
+                print(f"Cannot find file: {fn_cur_prob} for category {cat}.")
                 category_ok = False
                 break
             
-            cur_prob = cv2.imread(fn_curProb,0)
-            cur_prob = np.clip( (cur_prob.astype('f4'))/(np.iinfo(cur_prob.dtype).max),0.,1.)
+            cur_prob = cv2.imread(fn_cur_prob, cv2.IMREAD_GRAYSCALE)
+            if cur_prob is None:
+                print(f"Error: Could not read probability map {fn_cur_prob}")
+                continue
             
-            FN, FP, posNum, negNum = evalExp(cur_gt, cur_prob, thresh, validMap = None)
-            
-            assert FN.max()<=posNum, 'BUG @ poitive samples'
-            assert FP.max()<=negNum, 'BUG @ negative samples'
-            
-            # collect results for whole category
-            totalFP += FP
-            totalFN += FN
-            totalPosNum += posNum
-            totalNegNum += negNum
-        
+            # Normalize the probability map
+            cur_prob = np.clip((cur_prob.astype(np.float32)) / np.iinfo(cur_prob.dtype).max, 0.0, 1.0)
+
+            # Evaluate the file
+            fn, fp, pos_num, neg_num = evalExp(cur_gt, cur_prob, thresh, valid_map=None)
+
+            # Validate evaluation results
+            assert fn.max() <= pos_num, 'BUG: Positive samples exceeded'
+            assert fp.max() <= neg_num, 'BUG: Negative samples exceeded'
+
+            # Accumulate results
+            total_fp += fp
+            total_fn += fn
+            total_pos_num += pos_num
+            total_neg_num += neg_num
+
         if category_ok:
-            print "Computing evaluation scores..."
-            # Compute eval scores!
-            prob_eval_scores.append(pxEval_maximizeFMeasure(totalPosNum, totalNegNum, totalFN, totalFP, thresh = thresh))
+            print("Computing evaluation scores...")
+            # Compute evaluation scores
+            scores = pxEval_maximizeFMeasure(total_pos_num, total_neg_num, total_fn, total_fp, thresh=thresh)
+            prob_eval_scores.append(scores)
             eval_cats.append(cat)
-            
+
+            # Output results for the category
             factor = 100
-            for property in dataStructure.eval_propertyList:
-                print '%s: %4.2f ' %(property, prob_eval_scores[-1][property]*factor,)
+            for prop in DataStructure.eval_property_list:
+                print(f"{prop}: {scores[prop] * factor:.2f}")
 
+            print(f"Finished evaluating category: {eval_cats[-1]}")
 
-            print "Finished evaluating category: %s " %(eval_cats[-1],)
-    
-    if len(eval_cats)>0:     
-        print "Successfully finished evaluation for %d categories: %s " %(len(eval_cats),eval_cats)
+    if eval_cats:
+        print(f"Successfully finished evaluation for {len(eval_cats)} categories: {eval_cats}")
         return True
     else:
-        print "No categories have been evaluated!"
+        print("No categories have been evaluated!")
         return False
-    
 
 
 #########################################################################
-# evaluation script
+# Evaluation script entry point
 #########################################################################
 if __name__ == "__main__":
-
-    # check for correct number of arguments.
-    if len(sys.argv)!=3:
-        print "Usage: python evaluate_road.py  <result_dir> <gt_dir>"
-        print "<result_dir> = directory with the result propability maps, e.g., /home/elvis/kitti_road/my_results"
-        print "<train_dir>  = training directory (has to contain gt_image_2)  e.g., /home/elvis/kitti_road/training"
+    # Check for the correct number of arguments
+    if len(sys.argv) != 3:
+        print("Usage: python evaluate_road.py <result_dir> <train_dir>")
+        print("<result_dir> = Directory with the result probability maps, e.g., /home/elvis/kitti_road/my_results")
+        print("<train_dir> = Training directory (must contain gt_image_2), e.g., /home/elvis/kitti_road/training")
         sys.exit(1)
-      
-    # parse parameters
+
+    # Parse parameters
     result_dir = sys.argv[1]
-    gt_dir = sys.argv[2]
+    train_dir = sys.argv[2]
 
-    # Excecute main fun 
-    main(result_dir, gt_dir)
-
-
+    # Execute main function
+    success = main(result_dir, train_dir)
+    
+    if not success:
+        sys.exit(1)
+    else:
+        sys.exit(0)

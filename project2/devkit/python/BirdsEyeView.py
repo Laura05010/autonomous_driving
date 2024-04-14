@@ -1,364 +1,113 @@
 #!/usr/bin/env python
-#
-#  THE KITTI VISION BENCHMARK SUITE: ROAD BENCHMARK
-#
-#  Copyright (C) 2013
-#  Honda Research Institute Europe GmbH
-#  Carl-Legien-Str. 30
-#  63073 Offenbach/Main
-#  Germany
-#
-#  UNPUBLISHED PROPRIETARY MATERIAL.
-#  ALL RIGHTS RESERVED.
-#
-#  Authors: Tobias Kuehnl <tkuehnl@cor-lab.uni-bielefeld.de>
-#           Jannik Fritsch <jannik.fritsch@honda-ri.de>
-#
 
-import logging
 import numpy as np
+from glob import glob
 import os
+import sys
+import cv2
+from typing import Tuple, List, Any
 
-class BevParams(object):
-    '''
-
-    '''
-    # Param 
-    bev_size = None
-    bev_res = None
-    bev_xLimits = None
-    bev_zLimits = None
-    imSize = None
-
-    def __init__(self, bev_res, bev_xLimits, bev_zLimits, imSize):
-        '''
-
-        @param bev_size:
-        @param bev_res:
-        @param bev_xLimits:
-        @param bev_zLimits:
-        @param imSize:
-        '''
-        bev_size = (round((bev_zLimits[1] - bev_zLimits[0]) / bev_res), \
-                   round((bev_xLimits[1] - bev_xLimits[0]) / bev_res))
-        self.bev_size = bev_size
-        self.bev_res = bev_res
-        self.bev_xLimits = bev_xLimits
-        self.bev_zLimits = bev_zLimits
-        self.imSize = imSize
-
-    def px2meter(self, px_in):
-        '''
-
-        @param px_in:
-        '''
-        return px_in * self.bev_res
-
-    def meter2px(self, meter_in):
-        '''
-
-        @param meter_in:
-        '''
-        return meter_in / self.bev_res
-
-    def convertPositionMetric2Pixel(self, YXpointArrays):
-        '''
-
-        @param YXpointArrays:
-        '''
-        allY = YXpointArrays[:, 0]
-        allX = YXpointArrays[:, 1]
-        allYconverted = self.bev_size[0] - self.meter2px(allY - self.bev_zLimits[0])
-        allXconverted = self.meter2px(allX - self.bev_xLimits[0])
-        return np.array(np.append(allYconverted.reshape((len(allYconverted), 1)), allXconverted.reshape((len(allXconverted), 1)), axis = 1))
-        #    return [self.meter2px(inputTupleZ + self.bev_zLimits[0]), self.meter2px(inputTupleX + self.bev_xLimits[0])]
+class DataStructure:
+    """
+    All the definitions go in here.
+    """
+    cats = ['um_lane', 'um_road', 'umm_road', 'uu_road']
+    calib_end = '.txt'
+    im_end = '.png'
+    gt_end = '.png'
+    prob_end = '.png'
+    eval_property_list = ['MaxF', 'AvgPrec', 'PRE_wp', 'REC_wp', 'FPR_wp', 'FNR_wp']
+    train_data_subdir_gt = 'gt_image_2'
+    test_data_subdir_im2 = 'image_2'
+    image_shape_max: Tuple[int, int] = (376, 1242)
 
 
-    def convertPositionPixel2Metric(self, YXpointArrays):
-        '''
+def compute_baseline(train_dir: str, test_dir: str, output_dir: str) -> None:
+    """
+    Computes the location potential as a simple baseline for classifying the data.
 
-        @param YXpointArrays:
-        '''
-        allY = YXpointArrays[:, 0]
-        allX = YXpointArrays[:, 1]
-        allYconverted = self.px2meter(self.bev_size[0] - allY) + self.bev_zLimits[0]
-        allXconverted = self.px2meter(allX) + self.bev_xLimits[0]
-        return np.array(np.append(allYconverted.reshape((len(allYconverted), 1)), allXconverted.reshape((len(allXconverted), 1)), axis = 1))
+    :param train_dir: Directory of training data (has to contain ground truth data).
+    :param test_dir: Directory with testing data (has to contain images).
+    :param output_dir: Directory where the baseline results will be saved.
+    """
+    train_data_path_gt = os.path.join(train_dir, DataStructure.train_data_subdir_gt)
 
+    print(f"Computing category-specific location potential as a simple baseline for classifying the data...")
+    print(f"Using ground truth data from: {train_data_path_gt}")
+    print(f"All categories = {DataStructure.cats}")
 
+    # Loop over all categories
+    for cat in DataStructure.cats:
+        cat_tags = cat.split('_')
+        print(f"Computing on dataset: {cat_tags[0]} for class: {cat_tags[1]}")
 
-    def convertPositionPixel2Metric2(self, inputTupleY, inputTupleX):
-        '''
+        train_data_files_gt = glob(os.path.join(train_data_path_gt, cat + '*' + DataStructure.gt_end))
+        train_data_files_gt.sort()
 
-        @param inputTupleY:
-        @param inputTupleX:
-        '''
-
-        return (self.px2meter(self.bev_size[0] - inputTupleY) + self.bev_zLimits[0], self.px2meter(inputTupleX) + self.bev_xLimits[0])
-
-
-def readKittiCalib(filename, dtype = 'f8'):
-    '''
-    
-    :param filename:
-    :param dtype:
-    '''
-    outdict = dict()
-    output = open(filename, 'rb')
-    allcontent = output.readlines()
-    output.close()
-    for contentRaw in allcontent:
-        content = contentRaw.strip()
-        if content=='':
+        if not train_data_files_gt:
+            print(f"Error: Cannot find ground truth data in {train_data_path_gt}. Skipping category {cat}.")
             continue
-        if content[0]!='#' :
-            tmp = content.split(':')
-            assert len(tmp)==2, 'wrong file format, only one : per line!'
-            var = tmp[0].strip()
-            values = np.array(tmp[-1].strip().split(' '), dtype)
-
-            outdict[var] = values
-
-    return outdict
-
-class KittiCalibration(object):
-    calib_dir = None
-    calib_end = None
-    R0_rect = None
-    P2 = None
-    Tr33 = None
-    Tr = None
-    Tr_cam_to_road = None
-
-    def __init__(self):
-        '''
-        '''
-        pass
-
-
-    def readFromFile(self, filekey = None, fn = None):
-        '''
-
-        @param fn:
-        '''
-
-
-        if filekey != None:
-            fn = os.path.join(self.calib_dir, filekey + self.calib_end)
-
-        assert fn != None, 'Problem! fn or filekey must be != None'
-        cur_calibStuff_dict = readKittiCalib(fn)
-        self.setup(cur_calibStuff_dict)
-
-    def setup(self, dictWithKittiStuff, useRect = False):
-        '''
-
-        @param dictWithKittiStuff:
-        '''
-        dtype_str = 'f8'
-        #dtype = np.float64
-
-        self.P2 = np.matrix(dictWithKittiStuff['P2']).reshape((3,4))
-
-        if useRect:
-            #
-            R2_1 = self.P2
-            #self.R0_rect = None
-
-        else:
-            R0_rect_raw = np.array(dictWithKittiStuff['R0_rect']).reshape((3,3))
-            # Rectification Matrix
-            self.R0_rect = np.matrix(np.hstack((np.vstack((R0_rect_raw, np.zeros((1,3), dtype_str))), np.zeros((4,1), dtype_str))))
-            self.R0_rect[3,3]=1.
-            # intermediate result
-            R2_1 = np.dot(self.P2, self.R0_rect)
-
-        Tr_cam_to_road_raw = np.array(dictWithKittiStuff['Tr_cam_to_road']).reshape(3,4)
-        # Transformation matrixs
-        self.Tr_cam_to_road = np.matrix(np.vstack((Tr_cam_to_road_raw, np.zeros((1,4), dtype_str))))
-        self.Tr_cam_to_road[3,3]=1.
-
-        self.Tr = np.dot(R2_1,  self.Tr_cam_to_road.I)
-        self.Tr33 =  self.Tr[:,[0,2,3]]
-
-    def get_matrix33(self):
-        '''
-
-        '''
-        assert self.Tr33 != None
-        return self.Tr33
-
-class BirdsEyeView(object):
-    '''
-
-    '''
-    imSize = None
-    bevParams = None
-    invalid_value = float('-INFINITY')
-    im_u_float = None
-    im_v_float = None
-    bev_x_ind = None
-    bev_z_ind = None
-    def __init__(self, bev_res= 0.05, bev_xRange_minMax = (-10, 10), bev_zRange_minMax = (6, 46)):
-        '''
         
-        :param bev_res:
-        :param bev_xRange_minMax:
-        :param bev_zRange_minMax:
-        '''
+        # Compute location potential
+        location_potential = np.zeros(DataStructure.image_shape_max, dtype=np.float32)
 
-        
-        self.calib = KittiCalibration()
-        bev_res = bev_res
-        bev_xRange_minMax = bev_xRange_minMax
-        bev_zRange_minMax = bev_zRange_minMax
-        self.bevParams = BevParams(bev_res, bev_xRange_minMax, bev_zRange_minMax, self.imSize)
-
-    
-    def world2image(self, X_world, Y_world, Z_world):
-        '''
-
-        @param X_world:
-        @param Y_world:
-        @param Z_world:
-        '''
-
-        if not type(Y_world) == np.ndarray:
-            # Y can be a scalar
-            Y_world = np.ones_like(Z_world)*Y_world
-        y = np.vstack((X_world, Y_world, Z_world, np.ones_like(Z_world)))
-        test  = self.world2image_uvMat(np.vstack((X_world, Z_world, np.ones_like(Z_world) )))
-
-        self.xi1 = test[0,:]#vec2[0,:]
-        self.yi1 = test[1,:]#vec2[1,:]
-
-        assert  self.imSize != None
-        condition = ~((self.yi1 >= 1) & (self.xi1 >= 1) & (self.yi1 <= self.imSize[0]) & (self.xi1 <= self.imSize[1]))
-        if isinstance(condition, np.ndarray):
-            # Array
-            self.xi1[condition] = self.invalid_value
-            self.yi1[condition] = self.invalid_value
-        elif condition == True:
-            # Scalar
-            self.xi1 = self.invalid_value
-            self.yi1 = self.invalid_value
-
-    def world2image_uvMat(self, uv_mat):
-        '''
-
-        @param XYZ_mat: is a 4 or 3 times n matrix
-        '''
-        if uv_mat.shape[0] == 2:
-            if len(uv_mat.shape)==1:
-                uv_mat = uv_mat.reshape(uv_mat.shape + (1,))
-            uv_mat = np.vstack((uv_mat, np.ones((1, uv_mat.shape[1]), uv_mat.dtype)))
-        result = np.dot(self.Tr33, uv_mat)
-        #w0 = -(uv_mat[0]* self.Tr_inv_33[1,0]+ uv_mat[1]* self.Tr_inv[1,1])/self.Tr_inv[1,2]
-        resultB = np.broadcast_arrays(result, result[-1,:])
-        return resultB[0] / resultB[1]
-
-    
-    
-    def setup(self, calib_file):
-        '''
-        
-        :param calib_file:
-        '''
-  
-        self.calib.readFromFile(fn= calib_file)
-        self.set_matrix33(self.calib.get_matrix33())
-    
-    def set_matrix33(self, matrix33):
-        '''
-
-        @param matrix33:
-        '''
-        self.Tr33 = matrix33
-
-    def compute(self, data):
-        '''
-        Compute BEV
-        :param data:
-        '''
-        self.imSize = data.shape
-        self.computeBEVLookUpTable()
-        return self.transformImage2BEV(data, out_dtype = data.dtype)
-
-    def computeBEVLookUpTable(self, cropping_ul = None, cropping_size = None):
-        '''
-
-        @param cropping_ul:
-        @param cropping_size:
-        '''
-
-        # compute X,Z mesh from BEV params
-        mgrid = np.lib.index_tricks.nd_grid()
-
-        res = self.bevParams.bev_res
-
-        x_vec = np.arange(self.bevParams.bev_xLimits[0] + res / 2, self.bevParams.bev_xLimits[1], res)
-        z_vec = np.arange(self.bevParams.bev_zLimits[1] - res / 2, self.bevParams.bev_zLimits[0], -res)
-        XZ_mesh = np.meshgrid(x_vec, z_vec)
-
-
-        assert XZ_mesh[0].shape == self.bevParams.bev_size
-
-
-        Z_mesh_vec = (np.reshape(XZ_mesh[1], (self.bevParams.bev_size[0] * self.bevParams.bev_size[1]), order = 'F')).astype('f4')
-        X_mesh_vec = (np.reshape(XZ_mesh[0], (self.bevParams.bev_size[0] * self.bevParams.bev_size[1]), order = 'F')).astype('f4')
-
-
-        self.world2image(X_mesh_vec, 0, Z_mesh_vec)
-        # output-> (y, x)
-        if (cropping_ul is not None):
-            valid_selector = np.ones((self.bevParams.bev_size[0] * self.bevParams.bev_size[1],), dtype = 'bool')
-            valid_selector = valid_selector & (self.yi1 >= cropping_ul[0]) & (self.xi1 >= cropping_ul[1])
-            if (cropping_size is not None):
-                valid_selector = valid_selector & (self.yi1 <= (cropping_ul[0] + cropping_size[0])) & (self.xi1 <= (cropping_ul[1] + cropping_size[1]))
-            # using selector to delete invalid pixel
-            selector = (~(self.xi1 == self.invalid_value)).reshape(valid_selector.shape) & valid_selector  # store invalid value positions
-        else:
-            # using selector to delete invalid pixel
-            selector = ~(self.xi1 == self.invalid_value)  # store invalid value positions
-
-        y_OI_im_sel = self.yi1[selector]# without invalid pixel
-        x_OI_im_sel = self.xi1[selector]# without invalid pixel
-
-
-        # indices for bev positions for the LookUpTable
-        ZX_ind = (mgrid[1:self.bevParams.bev_size[0] + 1, 1:self.bevParams.bev_size[1] + 1]).astype('i4')
-        Z_ind_vec = np.reshape(ZX_ind[0], selector.shape, order = 'F')
-        X_ind_vec = np.reshape(ZX_ind[1], selector.shape, order = 'F')
-
-        # Select
-        Z_ind_vec_sel = Z_ind_vec[selector] # without invalid pixel
-        X_ind_vec_sel = X_ind_vec[selector] # without invalid pixel
-
-        # Save stuff for LUT in BEVParams
-        self.im_u_float = x_OI_im_sel
-        self.im_v_float = y_OI_im_sel
-        self.bev_x_ind = X_ind_vec_sel.reshape(x_OI_im_sel.shape)
-        self.bev_z_ind = Z_ind_vec_sel.reshape(y_OI_im_sel.shape)
-
-    def transformImage2BEV(self, inImage, out_dtype = 'f4'):
-        '''
-        
-        :param inImage:
-        '''
-        assert self.im_u_float != None
-        assert self.im_v_float != None
-        assert self.bev_x_ind != None
-        assert self.bev_z_ind != None
-        
-        
-        if len(inImage.shape) > 2:
-            outputData = np.zeros(self.bevParams.bev_size + (inImage.shape[2],), dtype = out_dtype)
-            for channel in xrange(0, inImage.shape[2]):
-                outputData[self.bev_z_ind-1, self.bev_x_ind-1, channel] = inImage[self.im_v_float.astype('u4')-1, self.im_u_float.astype('u4')-1, channel]
-        else:
-            outputData = np.zeros(self.bevParams.bev_size, dtype = out_dtype)
-            outputData[self.bev_z_ind-1, self.bev_x_ind-1] = inImage[self.im_v_float.astype('u4')-1, self.im_u_float.astype('u4')-1]
-        
-        return  outputData
+        # Loop over all ground truth files for the particular category
+        for train_data_file_gt in train_data_files_gt:
+            gt_image = cv2.imread(train_data_file_gt, cv2.IMREAD_GRAYSCALE)
+            if gt_image is None:
+                print(f"Error: Could not read ground truth image: {train_data_file_gt}.")
+                continue
             
+            # Convert the image to binary (true for road, false otherwise)
+            gt_image = gt_image > 0
+            
+            # Add the ground truth data to the location potential
+            location_potential[:gt_image.shape[0], :gt_image.shape[1]] += gt_image
         
+        # Normalize location potential
+        location_potential /= len(train_data_files_gt)
+
+        # Convert to uint8 and scale to 255
+        location_potential_u8 = (location_potential * 255).astype(np.uint8)
+        
+        print(f"Done: computing location potential for category: {cat}.")
+
+        # Create the output directory if it doesn't exist
+        os.makedirs(output_dir, exist_ok=True)
+    
+        # Process testing data files
+        test_data_files_im2 = glob(os.path.join(test_dir, DataStructure.test_data_subdir_im2, f"{cat_tags[0]}_*{DataStructure.im_end}"))
+        test_data_files_im2.sort()
+        
+        print(f"Writing location potential as perspective probability map into {output_dir}.")
+        
+        for test_data_file_im2 in test_data_files_im2:
+            # Extract the filename
+            file_name_im2 = os.path.basename(test_data_file_im2)
+            ts_str = file_name_im2.split(f"{cat_tags[0]}_")[-1]
+            
+            # Construct the output filename
+            output_filename = os.path.join(output_dir, cat + ts_str)
+            
+            # Write the location potential to the output file
+            cv2.imwrite(output_filename, location_potential_u8)
+        
+        print(f"Done: Creating perspective baseline for category: {cat}.")
+
+
+if __name__ == "__main__":
+    # Check for the correct number of arguments
+    if len(sys.argv) != 4:
+        print("Usage: python compute_baseline.py <TrainDir> <TestDir> <OutputDir>")
+        print("<TrainDir> = Directory of training data (must contain ground truth data: gt_image_2).")
+        print("<TestDir> = Directory of testing data (must contain images: image_2).")
+        print("<OutputDir> = Directory where the baseline results will be saved.")
+        sys.exit(1)
+    
+    # Parse parameters
+    train_dir = sys.argv[1]
+    test_dir = sys.argv[2]
+    output_dir = sys.argv[3]
+    
+    # Execute main function
+    compute_baseline(train_dir, test_dir, output_dir)
