@@ -1,0 +1,13 @@
+names:
+  - Car
+  - Pedestrian
+  - Van
+  - Cyclist
+  - Truck
+  - Misc
+  - Tram
+  - Person_sitting
+  - DontCare
+nc: 9
+train: /content/drive/MyDrive/CSC420_FINAL/object_detection_dataset/training
+val: /content/drive/MyDrive/CSC420_FINAL/object_detection_dataset/validation
